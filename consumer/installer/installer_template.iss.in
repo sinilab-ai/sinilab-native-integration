@@ -1,0 +1,321 @@
+; Phase 3.2e RC1 - installer branding correction.
+; Derived from locked Phase 3.2d Revision 4.
+; Collaborator-owned. Autodesk 3ds Max 2024 ONLY.
+;
+; Collaborator and product identity are rendered dynamically.
+; Generic artwork contains no collaborator-specific text.
+
+#define CollaboratorName "@CollaboratorName@"
+#define ProductDisplayName "@ProductDisplayName@"
+#define ProductSubtitle "@ProductSubtitle@"
+#define ProductPlatform "3ds Max"
+#define ProductType "Native plug-in"
+
+#define AppName "@AppName@"
+#define AppVersion "@AppVersion@"
+
+[Setup]
+AppId={{@AppId@}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppPublisher={#CollaboratorName}
+DefaultDirName={autopf}\SinilabCollaborators\@ProductDisplayName@
+DisableDirPage=yes
+DisableWelcomePage=no
+DisableReadyPage=yes
+DisableProgramGroupPage=yes
+OutputDir=..\output
+OutputBaseFilename=@OutputBaseFilename@
+Compression=lzma
+SolidCompression=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=admin
+WizardStyle=modern
+WizardImageFile=branding\collaborator-wizard.bmp
+WizardSmallImageFile=branding\collaborator-small.bmp
+CloseApplications=no
+RestartApplications=no
+UninstallDisplayName={#AppName}
+
+[Files]
+Source: "..\staging\@BinaryFilename@"; DestDir: "{code:GetPluginsDir}"; Flags: ignoreversion
+Source: "@ReadmeFilename@"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\staging\@HelperFilename@"; DestDir: "{app}"; Flags: ignoreversion
+
+[Code]
+
+var
+  MaxPath: String;
+
+// ---------------------------------------------------------
+// Dynamic installer branding
+// ---------------------------------------------------------
+//
+// TNewStaticText produces opaque backgrounds over bitmaps.
+// TLabel supports transparent rendering.
+//
+// All collaborator/product text is supplied through defines.
+// The background artwork remains generic.
+
+procedure AddBrandLabel(
+  Page: TNewNotebookPage;
+  CaptionText: String;
+  LeftPos, TopPos, FontSize: Integer;
+  IsBold: Boolean;
+  Colour: TColor);
+var
+  LabelControl: TLabel;
+begin
+  LabelControl := TLabel.Create(WizardForm);
+  LabelControl.Parent := Page;
+
+  LabelControl.Left :=
+    WizardForm.WizardBitmapImage.Left + ScaleX(LeftPos);
+
+  LabelControl.Top :=
+    WizardForm.WizardBitmapImage.Top + ScaleY(TopPos);
+
+  LabelControl.Width := ScaleX(175);
+  LabelControl.Height := ScaleY(35);
+
+  LabelControl.AutoSize := False;
+  LabelControl.WordWrap := True;
+  LabelControl.Transparent := True;
+
+  LabelControl.Caption := CaptionText;
+
+  LabelControl.Font.Name := 'Segoe UI';
+  LabelControl.Font.Size := FontSize;
+
+  if IsBold then
+    LabelControl.Font.Style := [fsBold]
+  else
+    LabelControl.Font.Style := [];
+
+  LabelControl.Font.Color := Colour;
+
+  LabelControl.BringToFront;
+end;
+
+procedure AddInstallerBranding(Page: TNewNotebookPage);
+begin
+  AddBrandLabel(
+    Page,
+    '{#CollaboratorName}',
+    14, 32, 9, True, $00E5D666);
+
+  AddBrandLabel(
+    Page,
+    '{#ProductDisplayName}',
+    14, 70, 10, True, clWhite);
+
+  AddBrandLabel(
+    Page,
+    '{#ProductSubtitle}',
+    14, 115, 9, False, clWhite);
+
+  AddBrandLabel(
+    Page,
+    '{#ProductPlatform}',
+    14, 161, 9, False, $00E7D5C8);
+
+  AddBrandLabel(
+    Page,
+    '{#ProductType}',
+    14, 183, 8, False, $00E7D5C8);
+end;
+
+procedure InitializeWizard();
+begin
+  AddInstallerBranding(WizardForm.WelcomePage);
+  AddInstallerBranding(WizardForm.FinishedPage);
+end;
+
+// Keep the approved branded Welcome and Finished pages.
+// Skip the unbranded Ready page even if Inno Setup exposes it.
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := PageID = wpReady;
+end;
+
+// ---------------------------------------------------------
+// Machine-wide product registration
+// ---------------------------------------------------------
+//
+// The elevated installer invokes the official helper.
+// Discovery metadata is stored in HKLM.
+// Licence credentials are never modified.
+
+function UpdateInstallation(const AddYear: Boolean): Boolean;
+var
+  ExitCode: Integer;
+  Action: String;
+begin
+  Result := False;
+
+  if AddYear then
+    Action := 'add'
+  else
+    Action := 'remove-version 2024';
+
+  if AddYear then
+  begin
+    if not Exec(
+      ExpandConstant('{app}\@HelperFilename@'),
+      'add', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+      Exit;
+
+    if ExitCode <> 0 then
+      Exit;
+
+    Action := 'add-version 2024';
+  end;
+
+  if not Exec(
+    ExpandConstant('{app}\@HelperFilename@'),
+    Action, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+    Exit;
+
+  Result := ExitCode = 0;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if not UpdateInstallation(True) then
+      MsgBox(
+        'The plugin was installed, but machine-wide product registration failed. Please contact the product collaborator.',
+        mbCriticalError, MB_OK);
+  end;
+end;
+
+procedure CurUninstallStepChanged(
+  CurUninstallStep: TUninstallStep);
+begin
+  // Execute before the registration helper is removed.
+  if CurUninstallStep = usUninstall then
+  begin
+    if not UpdateInstallation(False) then
+      MsgBox(
+        'The plugin is being removed, but Installed In could not be updated. Please contact the product collaborator.',
+        mbCriticalError, MB_OK);
+  end;
+end;
+
+// ---------------------------------------------------------
+// Autodesk 3ds Max process protection
+// ---------------------------------------------------------
+//
+// Check the actual process, not the window title.
+// Refuse to proceed if process detection fails.
+
+function IsMaxRunning(): Boolean;
+var
+  ExitCode: Integer;
+begin
+  if not Exec(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -Command "if (Get-Process -Name 3dsmax -ErrorAction SilentlyContinue) { exit 10 } else { exit 0 }"',
+    '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  Result := ExitCode <> 0;
+end;
+
+function WaitForManualClose(
+  const IsUninstall: Boolean): Boolean;
+var
+  Answer: Integer;
+  CancelMessage: String;
+begin
+  if IsUninstall then
+    CancelMessage :=
+      'Choose Cancel to stop without removing the plugin.'
+  else
+    CancelMessage :=
+      'Choose Cancel to stop without installing the plugin.';
+
+  Result := True;
+
+  while IsMaxRunning() do
+  begin
+    Answer := MsgBox(
+      'Please close Autodesk 3ds Max 2024 before continuing.' +
+      Chr(13) + Chr(10) + Chr(13) + Chr(10) +
+      'Save your work and close the application manually, then click Retry.' +
+      Chr(13) + Chr(10) +
+      CancelMessage,
+      mbError, MB_RETRYCANCEL);
+
+    if Answer <> IDRETRY then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
+// ---------------------------------------------------------
+// Installation and uninstall lifecycle
+// ---------------------------------------------------------
+
+function InitializeSetup(): Boolean;
+begin
+  Result := WaitForManualClose(False);
+
+  if not Result then
+    Exit;
+
+  MaxPath := '';
+
+  if not RegQueryStringValue(
+    HKLM64,
+    'SOFTWARE\Autodesk\3dsMax\26.0',
+    'Installdir',
+    MaxPath) then
+  begin
+    RegQueryStringValue(
+      HKLM64,
+      'SOFTWARE\Autodesk\3dsMax\26.0',
+      'InstallDir',
+      MaxPath);
+  end;
+
+  if (MaxPath = '') or (not DirExists(MaxPath)) then
+    MaxPath := ExpandConstant(
+      '{autopf}\Autodesk\3ds Max 2024');
+
+  Result :=
+    DirExists(MaxPath) and
+    DirExists(AddBackslash(MaxPath) + 'Plugins');
+
+  if not Result then
+    MsgBox(
+      'Autodesk 3ds Max 2024 Plugins folder was not detected. Installation cancelled.',
+      mbCriticalError, MB_OK);
+end;
+
+function PrepareToInstall(
+  var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+
+  if not WaitForManualClose(False) then
+    Result :=
+      'Installation cancelled. Please close Autodesk 3ds Max 2024 and run setup again.';
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := WaitForManualClose(True);
+end;
+
+function GetPluginsDir(Param: String): String;
+begin
+  Result := AddBackslash(MaxPath) + 'Plugins';
+end;
