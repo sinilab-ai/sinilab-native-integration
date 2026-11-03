@@ -1,32 +1,30 @@
-# Sinilab.ai Native Plugin Integration
+# Sinilab.ai Native C++ Integration Kit — v1.0
 
-Official engineering guidance for collaborator-owned native C++ plugins integrating with Sinilab.ai licensing.
+**Release scope:** 3ds Max 2024 native C++ reference integration, independently built and Windows runtime-tested with Create Cube. This is a developer integration kit, **not** a customer download or a pre-certified installer for arbitrary plugins.
 
-**Status: documentation candidate v0.2 — review before publishing.** The Phase 3.2e RC1 reference has completed functional testing, but its final production SDK release and public binary distribution have not been approved. This repository is not yet a standalone build kit.
+## Start here
 
-## For collaborators
+1. Copy your complete authoritative **Licence + Integration → Product Integration → Integration Specification** into `consumer/metadata/integration-specification.md`. The exact WooCommerce Product Code (SKU) must remain unchanged.
+2. Replace the Create Cube example with your collaborator-owned native C++ plugin. Use only the supplied public licensing API and enforce entitlement before protected operations. Do not create your own Bridge client, key storage or activation UI.
+3. Update `consumer/metadata/build-evidence.json` using **actual compiled output names**, real plugin version and supported 3ds Max versions. This file is not a second product-identity form.
+4. Configure your **private** GitHub Actions repository with the secret `AUTODESK_MAX2024_SDK_URL`, pointing to your authorised Autodesk SDK MSI. The reference workflow uses MSVC v142 and Windows 2022. Do not commit Autodesk SDK packages or credentials.
+5. Run the reference workflow or adapt your existing build. Test licensing, installation, revocation/recovery and uninstall on your own product before distributing its installer.
 
-1. Create your product in the Sinilab.ai Collaborator Store and set its canonical SKU.
-2. Open **Licence + Integration**, select your product and integration type, and copy the generated **Integration Specification**.
-3. Give that specification and your existing plugin source to your preferred AI engineering assistant or developer.
-4. Ask the assistant to follow [the engineering handover](docs/ai-assistant-handover.md) and [native integration guidance](docs/native-licensing-integration.md).
-5. Test, package, upload and test-purchase your finished plugin before publishing.
+## Included
 
-You do not need to manually assemble SDK files to begin. Your engineering assistant will need access to the approved SDK build dependencies before compiling.
-
-## Engineering resources
-
-- [AI assistant handover](docs/ai-assistant-handover.md)
-- [Native licensing integration](docs/native-licensing-integration.md)
-- [Architecture and lifecycle](docs/licensing-lifecycle.md)
-- [Build and GitHub Actions](docs/build-and-github-actions.md)
-- [Installer and registration](docs/installer-and-registration.md)
-- [Testing checklist](testing/release-checklist.md)
-- [Release and publication gates](docs/release-and-publication.md)
-- [Resource status and outstanding dependencies](RESOURCE_STATUS.md)
+- Compiled Sinilab.ai SDK and PluginRegistry static libraries and public headers
+- Specification-to-metadata parser, tests, and build preflight
+- 3ds Max 2024 Create Cube source/CMake reference
+- Generic registration helper and metadata generator
+- Approved generic Inno Setup sidebar artwork and installer generator
+- Windows GitHub Actions reference workflow
 
 ## Boundaries
 
-Collaborators retain ownership of their plugins, source, build processes and installers. Sinilab.ai maintains the shared licensing system. Never modify the Bridge or shared licensing application; do not create a competing activation interface or key store. Native C++ plugins require version-matched Autodesk SDK builds and collaborator-owned Windows EXE installers, not MZP packages.
+- Only the Create Cube **2024 reference** has been independently compiled and Windows runtime-tested. Other products, Autodesk versions and installer technologies need their own testing.
+- Collaborators own their installer, source, release cadence and supported Max versions. Preserve an existing working installer rather than imposing Inno Setup.
+- Plugin uninstall removes plugin and discovery registration, **not** licensing entitlement.
+- The Sinilab.ai Plugin Licensing application and customer Read Me are delivered separately by the platform; do not ship developer libraries, headers or guides to customers.
+- Never distribute private SDK/registry implementation sources, Autodesk SDK archives, credentials or customer licence keys.
 
-Do not include development SDK files or engineering resources in customer downloads. The Sinilab.ai Plugin Licensing application and customer Read Me are provided separately for eligible purchases.
+See `RELEASE_NOTES.md` for validation and limits.

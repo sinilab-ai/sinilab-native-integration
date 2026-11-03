@@ -1,0 +1,124 @@
+name: Sinilab.ai 3ds Max 2024 Reference Build
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  independent-consumer:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out independent consumer branch
+        uses: actions/checkout@v4
+      - name: Validate Integration Specification and generate metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m unittest discover -s consumer/tests -v
+          if ($LASTEXITCODE -ne 0) { throw 'Specification parser tests failed' }
+          python consumer/tools/spec_to_metadata.py --spec consumer/metadata/integration-specification.md --build-evidence consumer/metadata/build-evidence.json --output consumer/metadata/product-metadata.json
+          if ($LASTEXITCODE -ne 0) { throw 'Integration Specification parsing failed' }
+          $m = Get-Content consumer/metadata/product-metadata.json -Raw | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($m.product_code) -or $m.registration_product_code -ne $m.product_code) { throw 'Authoritative SKU mismatch' }
+          if ($m.max_version -ne '2024') { throw 'Unsupported Max version' }
+      - name: Verify self-contained consumer input
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python consumer/tools/preflight.py
+          if ($LASTEXITCODE -ne 0) { throw 'Preflight failed' }
+          if (Test-Path consumer/src/plugin_registry.cpp) { throw 'Private registry implementation present' }
+          if (Test-Path consumer/src/sinilab_native_sdk.cpp) { throw 'Private SDK implementation present' }
+      - name: Activate MSVC v142 x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: '14.29'
+          arch: x64
+      - name: Fetch and validate Autodesk 3ds Max 2024 SDK
+        shell: pwsh
+        env:
+          SDK_URL: ${{ secrets.AUTODESK_MAX2024_SDK_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SDK_URL)) { throw 'Missing AUTODESK_MAX2024_SDK_URL' }
+          $uri = [Uri]$env:SDK_URL
+          if ($uri.Scheme -ne 'https' -or $uri.Host -notin @('www.dropbox.com','dropbox.com','dl.dropboxusercontent.com')) { throw 'Expected approved HTTPS Dropbox URL' }
+          $builder = [UriBuilder]$uri
+          $q = [System.Web.HttpUtility]::ParseQueryString($builder.Query)
+          $q.Remove('dl'); $q.Set('dl','1'); $builder.Query = $q.ToString()
+          $msi = Join-Path $env:RUNNER_TEMP 'SDK_3dsMax2024.msi'
+          Invoke-WebRequest -Uri $builder.Uri.AbsoluteUri -OutFile $msi -MaximumRedirection 5 -ErrorAction Stop
+          if ((Get-Item $msi).Length -lt 1000000) { throw 'SDK MSI download too small' }
+          $sig = Get-AuthenticodeSignature $msi
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Autodesk') { throw 'Autodesk MSI signature validation failed' }
+          $proc = Start-Process msiexec.exe -ArgumentList @('/i',('"'+$msi+'"'),'/qn','/norestart') -Wait -PassThru
+          if ($proc.ExitCode -notin @(0,3010)) { throw "Autodesk MSI failed: $($proc.ExitCode)" }
+          Remove-Item $msi -Force
+      - name: Build native plugin from packaged SDK only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdkRoot = Join-Path ${env:ProgramFiles} 'Autodesk\3ds Max 2024 SDK'
+          $header = Get-ChildItem $sdkRoot -Filter max.h -Recurse -File | Select-Object -First 1
+          $core = Get-ChildItem $sdkRoot -Filter core.lib -Recurse -File | Select-Object -First 1
+          if (!$header -or !$core) { throw 'Autodesk SDK not found' }
+          cmake -S consumer/examples/create-cube-2024 -B "$env:RUNNER_TEMP/consumer-build" -G 'Visual Studio 17 2022' -A x64 -T v142 "-DMAX2024_INCLUDE_DIR=$($header.DirectoryName)" "-DMAX2024_LIB_DIR=$($core.DirectoryName)"
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
+          cmake --build "$env:RUNNER_TEMP/consumer-build" --config Release --target SinilabCreateCube2024 --parallel
+          if ($LASTEXITCODE -ne 0) { throw 'Consumer plugin build failed' }
+          $plugin = Get-ChildItem "$env:RUNNER_TEMP/consumer-build" -Filter SinilabCreateCube2024.dlu -Recurse -File | Select-Object -First 1
+          if (!$plugin) { throw 'Consumer DLU missing' }
+          New-Item -ItemType Directory -Force -Path consumer/staging,consumer/output,consumer/installer/branding,stage13-2-result | Out-Null
+          Copy-Item $plugin.FullName consumer/staging/SinilabCreateCube2024.dlu
+      - name: Generate and link registration helper from packaged registry library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadata = 'consumer/metadata/product-metadata.json'
+          python consumer/registration/generate_identity.py --metadata $metadata --output consumer/registration/product_identity.generated.hpp
+          if ($LASTEXITCODE -ne 0) { throw 'Identity generation failed' }
+          & cl.exe /nologo /std:c++17 /EHsc /MD /O2 /DNDEBUG /W4 /I"consumer/registry/include" /I"consumer/registration" /Fe:consumer/staging/CollaboratorDemoRegistration.exe consumer/registration/generic_registration.cpp /link consumer/registry/lib/x64/sinilab_plugin_registry.lib advapi32.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Independent registry helper link failed' }
+          if (!(Test-Path consumer/staging/CollaboratorDemoRegistration.exe)) { throw 'Registration helper missing' }
+      - name: Generate branded installer from authoritative metadata
+        shell: pwsh
+        run: |
+          python consumer/installer/generate_installer.py --metadata consumer/metadata/product-metadata.json --output consumer/installer/Reusable_Collaborator.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer generation failed' }
+          $generated = Get-Content consumer/installer/Reusable_Collaborator.iss -Raw
+          if ($generated -match '@[A-Za-z]+@') { throw 'Unresolved installer placeholder' }
+           $m = Get-Content consumer/metadata/product-metadata.json -Raw | ConvertFrom-Json
+          if (-not $generated.Contains([string]$m.product_code)) { throw 'Authoritative SKU absent from installer identity' }
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+      - name: Compile branded Windows EXE
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { throw 'Inno Setup compiler missing' }
+          & $iscc consumer/installer/Reusable_Collaborator.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compile failed' }
+          $exe = Get-ChildItem consumer/output -Filter '*.exe' -File | Select-Object -First 1
+          if (!$exe) { throw 'EXE not produced' }
+          Copy-Item $exe.FullName stage13-2-result/
+          Copy-Item consumer/staging/SinilabCreateCube2024.dlu stage13-2-result/
+          @(
+            'FINAL DELIVERY CANDIDATE SPECIFICATION-DRIVEN BUILD: PASSED',
+            'Plugin: compiled from packaged sinilab_native_sdk.lib and headers',
+            'Registry helper: compiled from generic_registration.cpp and packaged sinilab_plugin_registry.lib',
+            'Installer: approved Stage 8.1 artwork and Integration Specification-derived metadata',
+            'Private SDK/registry implementation source: NOT USED',
+            'Autodesk SDK: secure download, not redistributed',
+            'Runtime installation and uninstall: NOT TESTED IN THIS RUN',
+            'Public distribution: NOT APPROVED'
+          ) | Set-Content stage13-2-result/BUILD_STATUS.txt
+          Copy-Item consumer/metadata/product-metadata.json stage13-2-result/GENERATED_PRODUCT_METADATA.json
+          (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content stage13-2-result/EXE_SHA256.txt
+      - name: Upload independent EXE candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sinilab-Stage13-2-Specification-Driven-EXE-PRIVATE-TEST
+          path: stage13-2-result/
+          if-no-files-found: error

@@ -1,0 +1,9 @@
+{
+  "product_version": "0.1.0-test",
+  "binary_filename": "SinilabCreateCube2024.dlu",
+  "helper_filename": "CollaboratorDemoRegistration.exe",
+  "readme_filename": "CUSTOMER_README.txt",
+  "built_max_versions": [
+    "2024"
+  ]
+}
